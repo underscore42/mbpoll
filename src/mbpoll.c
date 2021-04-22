@@ -227,6 +227,7 @@ typedef struct xMbPollContext {
   eSerialStopBits eRtuStopbits;
   eSerialParity eRtuParity;
   bool bIsVerbose;
+  bool bIsJSON;
   bool bIsPolling;
   int  iRtuMode;
   bool bIsWrite;
@@ -275,6 +276,7 @@ static xMbPollContext ctx = {
     .flow = SERIAL_FLOW_NONE
   },
   .bIsVerbose = false,
+  .bIsJSON = false,
   .bIsPolling = true,
   .bIsReportSlaveID = false,
   .iRtuMode = MODBUS_RTU_RTS_NONE,
@@ -313,14 +315,14 @@ static xChipIoSerial * xChipSerial;
 static const char sChipIoSlaveAddrStr[] = "chipio slave address";
 static const char sChipIoIrqPinStr[] = "chipio irq pin";
 // option -i et -n supplémentaires pour chipio
-static const char * short_options = "m:a:r:c:t:1l:o:p:b:d:s:P:u0WRhVvwBqi:n:";
+static const char * short_options = "m:a:r:c:t:1l:o:p:b:d:s:P:u0WRhVvJwBqi:n:";
 
 #else /* USE_CHIPIO == 0 */
 /* constants ================================================================ */
 #ifdef MBPOLL_GPIO_RTS
-static const char * short_options = "m:a:r:c:t:1l:o:p:b:d:s:P:u0WR::F::hVvwBq";
+static const char * short_options = "m:a:r:c:t:1l:o:p:b:d:s:P:u0WR::F::hVvJwBq";
 #else
-static const char * short_options = "m:a:r:c:t:1l:o:p:b:d:s:P:u0WRFhVvwBq";
+static const char * short_options = "m:a:r:c:t:1l:o:p:b:d:s:P:u0WRFhVvJwBq";
 #endif
 // -----------------------------------------------------------------------------
 #endif /* USE_CHIPIO == 0 */
@@ -328,10 +330,7 @@ static const char * short_options = "m:a:r:c:t:1l:o:p:b:d:s:P:u0WRFhVvwBq";
 /* private functions ======================================================== */
 void vAllocate (xMbPollContext * ctx);
 void vPrintReadValues (int iAddr, int iCount, xMbPollContext * ctx);
-void vPrintConfig (const xMbPollContext * ctx);
-void vPrintCommunicationSetup (const xMbPollContext * ctx);
 void vReportSlaveID (const xMbPollContext * ctx);
-void vHello (void);
 void vVersion (void);
 void vWarranty (void);
 void vUsage (FILE *stream, int exit_msg);
@@ -436,6 +435,10 @@ main (int argc, char **argv) {
       case 'v':
         ctx.bIsVerbose = true;
         PDEBUG ("debug enabled\n");
+        break;
+
+      case 'J':
+        ctx.bIsJSON = true;
         break;
 
       case 'm':
@@ -803,10 +806,6 @@ main (int argc, char **argv) {
   }
   modbus_set_debug (ctx.xBus, ctx.bIsVerbose);
 
-  if (false == ctx.bIsQuiet) {
-    vHello();
-  }
-
   if ( (ctx.iRtuMode != MODBUS_RTU_RTS_NONE) && (ctx.eMode == eModeRtu) &&
        !ctx.bIsChipIo) {
 
@@ -861,11 +860,6 @@ main (int argc, char **argv) {
   }
   else {
     int iNbReg, iStartReg;
-    // Affichage complet de la configuration
-    if (false == ctx.bIsQuiet) {
-      vPrintConfig (&ctx);
-    }
-
     // int32 et float utilisent 2 registres 16 bits
     iNbReg = ( (ctx.eFormat == eFormatInt) || (ctx.eFormat == eFormatFloat)) ?
              ctx.iCount * 2 : ctx.iCount;
@@ -918,7 +912,6 @@ main (int argc, char **argv) {
         if (iRet == iNbReg) {
 
           ctx.iRxCount++;
-          printf ("Written %d references.\n", ctx.iCount);
         }
         else {
           ctx.iErrorCount++;
@@ -936,17 +929,12 @@ main (int argc, char **argv) {
           modbus_set_slave (ctx.xBus, ctx.piSlaveAddr[i]);
           ctx.iTxCount++;
 
-          printf ("-- Polling slave %d...", ctx.piSlaveAddr[i]);
           if (ctx.bIsPolling) {
 
-            printf (" Ctrl-C to stop)\n");
-          }
-          else {
-
-            putchar ('\n');
           }
 
           int j;
+
           for (j = 0; j < ctx.iStartCount; j++) {
             // libmodbus utilise les adresses PDU !
             iStartReg = ctx.piStartRef[j] - ctx.iPduOffset;
@@ -1010,10 +998,17 @@ main (int argc, char **argv) {
 void
 vPrintReadValues (int iAddr, int iCount, xMbPollContext * ctx) {
   int i;
+
+  if (ctx->bIsJSON==true){
+    printf("{ \"modbus\":[{ ");
+  }
   for (i = 0; i < iCount; i++) {
 
-    printf ("[%d]: \t", iAddr);
-
+    if (ctx->bIsJSON==true){
+      printf("\"reg\": \"%d\",  \"value\": \"", iAddr);
+    } else {
+      printf ("[%d]: \t", iAddr);
+    }
     switch (ctx->eFormat) {
 
       case eFormatBin:
@@ -1064,6 +1059,22 @@ vPrintReadValues (int iAddr, int iCount, xMbPollContext * ctx) {
       default:  // Impossible normalement
         break;
     }
+    if (ctx->bIsJSON==true){
+      putchar ('\"');
+      if (i==(iCount-1)) {
+        putchar ('}');
+      } else {
+        putchar ('}');
+        putchar (',');
+        putchar ('{');
+      }
+    } else {
+      putchar ('\n');
+    }
+  }
+  if (ctx->bIsJSON==true){
+    putchar (']');
+    putchar ('}');
     putchar ('\n');
   }
 }
@@ -1075,11 +1086,6 @@ vReportSlaveID (const xMbPollContext * ctx) {
 
   modbus_set_slave (ctx->xBus, ctx->piSlaveAddr[0]);
   // Affichage de la configuration
-  printf ("Protocol configuration: Modbus %s\n", sModeList[ctx->eMode]);
-  printf ("Slave configuration...: address = %d, report slave id\n",
-          ctx->piSlaveAddr[0]);
-
-  vPrintCommunicationSetup (ctx);
 
   int iRet = modbus_report_slave_id (ctx->xBus, 256, ucReport);
 
@@ -1093,27 +1099,13 @@ vReportSlaveID (const xMbPollContext * ctx) {
     if (iRet > 1) {
       int iLen = iRet - 2;
 
-      printf (
-        "Length: %d\n"
-        "Id    : 0x%02X\n"
-        "Status: %s\n"
-        , iRet
-        , ucReport[0]
-        , (ucReport[1]) ? "On" : "Off"
-      );
-
       if (iLen > 0) {
         int i;
-        printf ("Data  : ");
         for (i = 2; i < (iLen + 2); i++) {
 
           if (isprint (ucReport[i])) {
 
             putchar (ucReport[i]);
-          }
-          else {
-
-            printf ("\\%02X", ucReport[i]);
           }
         }
         putchar ('\n');
@@ -1124,106 +1116,6 @@ vReportSlaveID (const xMbPollContext * ctx) {
       fprintf (stderr, "no data available\n");
     }
   }
-}
-
-// -----------------------------------------------------------------------------
-void
-vPrintCommunicationSetup (const xMbPollContext * ctx) {
-
-  if (ctx->eMode == eModeRtu) {
-#ifndef USE_CHIPIO
-// -----------------------------------------------------------------------------
-    const char sAddStr[] = "";
-#else /* USE_CHIPIO defined */
-// -----------------------------------------------------------------------------
-    const char * sAddStr;
-    if (ctx->bIsChipIo) {
-      sAddStr = " via ChipIo serial port";
-    }
-    else {
-
-      sAddStr = "";
-    }
-// -----------------------------------------------------------------------------
-#endif /* USE_CHIPIO defined */
-
-    printf ("Communication.........: %s%s, %s\n"
-            "                        t/o %.2f s, poll rate %d ms\n"
-            , ctx->sDevice
-            , sAddStr
-            , sSerialAttrToStr (&ctx->xRtu)
-            , ctx->dTimeout
-            , ctx->iPollRate);
-  }
-  else {
-
-    printf ("Communication.........: %s, port %s, t/o %.2f s, poll rate %d ms\n"
-            , ctx->sDevice
-            , ctx->sTcpPort
-            , ctx->dTimeout
-            , ctx->iPollRate);
-  }
-}
-
-// -----------------------------------------------------------------------------
-void
-vPrintConfig (const xMbPollContext * ctx) {
-
-  // Affichage de la configuration
-  printf ("Protocol configuration: Modbus %s\n", sModeList[ctx->eMode]);
-  printf ("Slave configuration...: address = ");
-  vPrintIntList (ctx->piSlaveAddr, ctx->iSlaveCount);
-  if (ctx->iStartCount > 1) {
-    printf ("\n                        start reference = ");
-    vPrintIntList (ctx->piStartRef, ctx->iStartCount);
-    printf ("\n");
-  }
-  else {
-    printf ("\n                        start reference = %d, count = %d\n",
-            ctx->piStartRef[0], ctx->iCount);
-  }
-  vPrintCommunicationSetup (ctx);
-  printf ("Data type.............: ");
-  switch (ctx->eFunction) {
-
-    case eFuncDiscreteInput:
-      printf ("discrete input\n");
-      break;
-
-    case eFuncCoil:
-      printf ("discrete output (coil)\n");
-      break;
-
-    case eFuncInputReg:
-      if (ctx->eFormat == eFormatInt) {
-        printf ("%s %s", sIntStr, ctx->bIsBigEndian ? sBigEndianStr : sLittleEndianStr);
-      }
-      else if (ctx->eFormat == eFormatFloat) {
-        printf ("%s %s", sFloatStr, ctx->bIsBigEndian ? sBigEndianStr : sLittleEndianStr);
-      }
-      else {
-        printf ("%s", sWordStr);
-      }
-      printf (", input register table\n");
-      break;
-
-    case eFuncHoldingReg:
-      if (ctx->eFormat == eFormatInt) {
-        printf ("%s %s", sIntStr, ctx->bIsBigEndian ? sBigEndianStr : sLittleEndianStr);
-      }
-      else if (ctx->eFormat == eFormatFloat) {
-        printf ("%s %s", sFloatStr, ctx->bIsBigEndian ? sBigEndianStr : sLittleEndianStr);
-      }
-      else {
-        printf ("%s", sWordStr);
-      }
-      printf (", output (holding) register table\n");
-      break;
-
-    default: // Impossible, la valeur a été vérifiée, évite un warning de gcc
-      break;
-  }
-  putchar ('\n');
 }
 
 // -----------------------------------------------------------------------------
@@ -1262,18 +1154,6 @@ vAllocate (xMbPollContext * ctx) {
 void
 vSigIntHandler (int sig) {
 
-  if ( (ctx.bIsPolling) && (!ctx.bIsWrite)) {
-
-    printf ("--- %s poll statistics ---\n"
-            "%d frames transmitted, %d received, %d errors, %.1f%% frame loss\n",
-            ctx.sDevice,
-            ctx.iTxCount,
-            ctx.iRxCount,
-            ctx.iErrorCount,
-            (double) (ctx.iTxCount - ctx.iRxCount) * 100.0 /
-            (double) ctx.iTxCount);
-  }
-
   free (ctx.pvData);
   free (ctx.piSlaveAddr);
   modbus_close (ctx.xBus);
@@ -1284,12 +1164,6 @@ vSigIntHandler (int sig) {
   iChipIoClose (xChip);
 // -----------------------------------------------------------------------------
 #endif /* USE_CHIPIO defined */
-  if (sig == SIGINT) {
-    printf ("\neverything was closed.\nHave a nice day !\n");
-  }
-  else {
-    putchar ('\n');
-  }
   fflush (stdout);
   exit (ctx.iErrorCount == 0 ? EXIT_SUCCESS : EXIT_FAILURE);
 }
@@ -1342,17 +1216,6 @@ vWarranty (void) {
     " along with mbpoll. If not, see <http://www.gnu.org/licenses/>.\n",
     AUTHORS);
   exit (EXIT_SUCCESS);
-}
-
-// -----------------------------------------------------------------------------
-void
-vHello (void) {
-  printf ("mbpoll %s - FieldTalk(tm) Modbus(R) Master Simulator\n",
-          VERSION_SHORT);
-  printf ("Copyright © 2015-2019 %s, %s\n", AUTHORS, WEBSITE);
-  printf ("This program comes with ABSOLUTELY NO WARRANTY.\n");
-  printf ("This is free software, and you are welcome to redistribute it\n");
-  printf ("under certain conditions; type 'mbpoll -w' for details.\n\n");
 }
 
 // -----------------------------------------------------------------------------
@@ -1454,7 +1317,7 @@ vUsage (FILE * stream, int exit_msg) {
            "  -h            Print this help summary page\n"
            "  -V            Print version and exit\n"
            "  -v            Verbose mode.  Causes %s to print debugging messages about\n"
-           "                its progress.  This is helpful in debugging connection...\n"
+           "  -J            JSON mode enable. Default is to only output register value pairs\n"
            , sModeToStr (DEFAULT_MODE)
            , RTU_SLAVEADDR_MIN
            , SLAVEADDR_MAX
